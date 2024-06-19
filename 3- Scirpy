@@ -1,0 +1,176 @@
+mdata = ir.datasets.wu2020_3k()
+sc.pp.filter_genes(mdata["gex"], min_cells=10)
+sc.pp.filter_cells(mdata["gex"], min_genes=100)
+
+
+sc.pp.normalize_per_cell(mdata["gex"])
+sc.pp.log1p(mdata["gex"])
+sc.pp.highly_variable_genes(mdata["gex"], flavor="cell_ranger", n_top_genes=5000)
+sc.tl.pca(mdata["gex"])
+sc.pp.neighbors(mdata["gex"])
+
+
+mdata["gex"].obsm["X_umap"] = mdata["gex"].obsm["X_umap_orig"]
+
+mdata.update()
+
+mu.pl.embedding(
+    mdata,
+    basis="gex:umap",
+    color=["gex:sample", "gex:patient", "gex:cluster"],
+    ncols=3,
+    wspace=0.7,
+)
+mu.pl.embedding(
+    mdata,
+    basis="gex:umap",
+    color=["CD8A", "CD4", "FOXP3"],
+    ncols=3,
+    wspace=0.7,
+)
+
+
+ir.pp.index_chains(mdata)
+ir.tl.chain_qc(mdata)
+_ = ir.pl.group_abundance(mdata, groupby="airr:receptor_subtype", target_col="gex:source")
+
+_ = ir.pl.group_abundance(mdata, groupby="airr:chain_pairing", target_col="gex:source")
+
+print(
+    "Fraction of cells with more than one pair of TCRs: {:.2f}".format(
+        np.sum(mdata.obs["airr:chain_pairing"].isin(["extra VJ", "extra VDJ", "two full chains", "multichain"]))
+        / mdata["airr"].n_obs
+    )
+)
+
+
+mu.pl.embedding(mdata, basis="gex:umap", color="airr:chain_pairing", groups="multichain")
+mu.pp.filter_obs(mdata, "airr:chain_pairing", lambda x: x != "multichain")
+mu.pp.filter_obs(mdata, "airr:chain_pairing", lambda x: ~np.isin(x, ["orphan VDJ", "orphan VJ"]))
+ax = ir.pl.group_abundance(mdata, groupby="airr:chain_pairing", target_col="gex:source")
+
+
+# using default parameters, `ir_dist` will compute nucleotide sequence identity
+ir.pp.ir_dist(mdata)
+ir.tl.define_clonotypes(mdata, receptor_arms="all", dual_ir="primary_only")
+
+
+ir.tl.clonotype_network(mdata, min_cells=2)
+
+mdata.obs.groupby("gex:source", dropna=False).size()
+
+ir.tl.define_clonotype_clusters(mdata, sequence="aa", metric="alignment", receptor_arms="all", dual_ir="any")
+ir.tl.clonotype_network(mdata, min_cells=3, sequence="aa", metric="alignment")
+_ = ir.pl.clonotype_network(mdata, color="gex:patient", label_fontsize=9, panel_size=(7, 7), base_size=20)
+with ir.get.airr_context(mdata, "junction_aa", ["VJ_1", "VDJ_1", "VJ_2", "VDJ_2"]):
+    cdr3_ct_159 = (
+        # TODO astype(str) is required due to a bug in pandas ignoring `dropna=False`. It seems fixed in pandas 2.x
+        mdata.obs.loc[lambda x: x["airr:cc_aa_alignment"] == "159"]
+        .astype(str)
+        .groupby(
+            [
+                "VJ_1_junction_aa",
+                "VDJ_1_junction_aa",
+                "VJ_2_junction_aa",
+                "VDJ_2_junction_aa",
+                "airr:receptor_subtype",
+            ],
+            observed=True,
+            dropna=False,
+        )
+        .size()
+        .reset_index(name="n_cells")
+    )
+cdr3_ct_159
+
+ir.tl.define_clonotype_clusters(
+    mdata,
+    sequence="aa",
+    metric="alignment",
+    receptor_arms="all",
+    dual_ir="any",
+    same_v_gene=True,
+    key_added="cc_aa_alignment_same_v",
+)
+
+# find clonotypes with more than one `clonotype_same_v`
+ct_different_v = mdata.obs.groupby("airr:cc_aa_alignment").apply(
+    lambda x: x["airr:cc_aa_alignment_same_v"].nunique() > 1
+)
+ct_different_v = ct_different_v[ct_different_v].index.values.tolist()
+ct_different_v
+
+with ir.get.airr_context(mdata, "v_call", ["VJ_1", "VDJ_1"]):
+    ct_different_v_df = (
+        mdata.obs.loc[
+            lambda x: x["airr:cc_aa_alignment"].isin(ct_different_v),
+            [
+                "airr:cc_aa_alignment",
+                "airr:cc_aa_alignment_same_v",
+                "VJ_1_v_call",
+                "VDJ_1_v_call",
+            ],
+        ]
+        .sort_values("airr:cc_aa_alignment")
+        .drop_duplicates()
+        .reset_index(drop=True)
+    )
+ct_different_v_df
+
+ir.tl.clonal_expansion(mdata)
+
+mu.pl.embedding(mdata, basis="gex:umap", color=["airr:clonal_expansion", "airr:clone_id_size"])
+
+_ = ir.pl.clonal_expansion(mdata, target_col="clone_id", groupby="gex:cluster", breakpoints=(1, 2, 5), normalize=False)
+
+
+ir.pl.clonal_expansion(mdata, target_col="clone_id", groupby="gex:cluster")
+
+_ = ir.pl.alpha_diversity(mdata, metric="normalized_shannon_entropy", groupby="gex:cluster")
+
+_ = ir.pl.group_abundance(mdata, groupby="airr:clone_id", target_col="gex:cluster", max_cols=10)
+
+
+_ = ir.pl.group_abundance(
+    mdata,
+    groupby="airr:clone_id",
+    target_col="gex:cluster",
+    max_cols=10,
+    normalize="gex:sample",
+)
+
+_ = ir.pl.group_abundance(mdata, groupby="airr:clone_id", target_col="gex:source", max_cols=15, figsize=(5, 3))
+_ = ir.pl.group_abundance(
+    mdata,
+    groupby="airr:clone_id",
+    target_col="gex:patient",
+    max_cols=15,
+    figsize=(5, 3),
+)
+
+ir.tl.clonotype_convergence(mdata, key_coarse="cc_aa_alignment", key_fine="clone_id")
+mu.pl.embedding(mdata, "gex:umap", color="airr:is_convergent")
+
+
+with ir.get.airr_context(mdata, "v_call"):
+    ir.pl.group_abundance(
+        mdata,
+        groupby="VJ_1_v_call",
+        target_col="gex:cluster",
+        normalize=True,
+        max_cols=10,
+    )
+
+with ir.get.airr_context(mdata, "v_call"):
+    ir.pl.group_abundance(
+        mdata[
+            mdata.obs["VDJ_1_v_call"].isin(["TRBV20-1", "TRBV7-2", "TRBV28", "TRBV5-1", "TRBV7-9"]),
+            :,
+        ],
+        groupby="gex:cluster",
+        target_col="VDJ_1_v_call",
+        normalize=True,
+    )
+
+
+    
