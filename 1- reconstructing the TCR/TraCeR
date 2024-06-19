@@ -1,0 +1,18 @@
+# 1- TraCeR
+
+# Assemble
+# - takes fastq files of paired-end RNA-seq reads from a single-cell and reconstructs TCR sequences
+tracer assemble [options] <phase_1> <cell> 
+
+# Summarise
+# takes a set of directories containing output from the assemble phase 
+# (each directory represents a single cell) and summarises TCR recovery rates as well as generating clonotype networks.
+tracer summarise [options] <autoimmune>
+
+
+# Build
+# creates new combinatorial recombinomes for species other than the inbuilt Human and Mouse.
+tracer build <mouse> <TCR> <locus_name> <N_padding> <colour> <V_seqs> <J_seqs> <C_seqs> <D_seqs>
+
+
+
